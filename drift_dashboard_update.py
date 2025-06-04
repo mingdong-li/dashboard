@@ -1,11 +1,10 @@
-import streamlit as st
-import pandas as pd
-import asyncio
 import os
+import streamlit as st
+import plotly.graph_objects as go
+import asyncio
+import pandas as pd
 
-from drift_dashboard import fetch_rate_cur  # Ensure this import works
-SAMPLE_FILE = "realtime_samples.csv"
-MAX_SAMPLES = 30
+from data_fectch import fetch_rate_cur, fetch_rate_history
 
 st.set_page_config(page_title="Drift Protocol Real-Time APY", layout="wide")
 st.title("Drift Protocol Real-Time APY")
@@ -16,12 +15,19 @@ token_name = st.sidebar.selectbox(
     key="realtime_token"
 )
 
-# Auto-refresh every 30 minutes (1800000 ms)
+SAMPLE_FILE = "./data/realtime_samples_{token}.csv".format(token=token_name.lower())
+MAX_SAMPLES = 10
+
+
+
+
+# Auto-refresh
 st_autorefresh = st.experimental_rerun if hasattr(st, "experimental_rerun") else None
 st_autorefresh = st_autorefresh or (lambda: None)
 st_autorefresh()
 # st.experimental_set_query_params(refresh=pd.Timestamp.now().isoformat())
 st.query_params = {"refresh": pd.Timestamp.now().isoformat()}
+
 
 def append_and_limit_csv(cur_d, cur_b, filename=SAMPLE_FILE, max_samples=MAX_SAMPLES):
     # Remove duplicate 'date' column from cur_b if exists
@@ -37,7 +43,8 @@ def append_and_limit_csv(cur_d, cur_b, filename=SAMPLE_FILE, max_samples=MAX_SAM
     else:
         merged.to_csv(filename, index=False)
 
-# Only fetch and append if last sample is older than 30 mins or file doesn't exist
+
+# Only fetch and append if last sample is older than 60 mins or file doesn't exist
 def should_fetch(filename=SAMPLE_FILE):
     if not os.path.exists(filename):
         return True
@@ -46,33 +53,43 @@ def should_fetch(filename=SAMPLE_FILE):
         return True
     last_time = pd.to_datetime(df['date'].iloc[-1])
     now = pd.Timestamp.now()
-    # return (now - last_time).total_seconds() > 1800
+    # return (now - last_time).total_seconds() > 3600
     return (now - last_time).total_seconds() > 10
 
 
+df_deposit, df_borrow = fetch_rate_history(token_name, day_fetch=30)
 if should_fetch():
     cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
     append_and_limit_csv(cur_d, cur_b)
 
+
 # Load data for plotting
 if os.path.exists(SAMPLE_FILE):
-    df_deposit = pd.read_csv(SAMPLE_FILE)
+    # some bugs or unclear logic here
+    df_saved = pd.read_csv(SAMPLE_FILE)
+    df_d_saved = df_saved[["date", "deposit_rate", "deposit_apy"]]
+    df_b_saced = df_saved[["date", "borrow_rate", "borrow_apy"]]
+
+    cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
+    df_deposit = pd.concat([df_deposit, df_d_saved], ignore_index=True)
+    df_borrow = pd.concat([df_borrow, df_d_saved], ignore_index=True)
+    
+
 else:
-    df_deposit, _ = asyncio.run(fetch_rate_cur(token_name))
-
-import plotly.graph_objects as go
-
+    cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
+    df_cur = pd.concat([cur_d, cur_b], axis=1)
+    append_and_limit_csv(cur_d, cur_b)
 
 
 col1, col2 = st.columns([3, 1])  
 with col1:
     fig = go.Figure()
     # Plot Borrow APY (red)
-    if "borrow_apy" in df_deposit.columns:
+    if "borrow_apy" in df_borrow.columns:
         fig.add_trace(
             go.Scatter(
-                x=df_deposit["date"],
-                y=df_deposit["borrow_apy"],
+                x=df_borrow["date"],
+                y=df_borrow["borrow_apy"],
                 name="Borrow APY",
                 mode="lines+markers",
                 line=dict(color="red"),
@@ -80,6 +97,18 @@ with col1:
                 hovertemplate="<b>Borrow APY: %{y:.4%}</b><br>%{x}<extra></extra>",
             ),
         )
+
+        # fig.add_trace(
+        #     go.Scatter(
+        #         x=df_borrow["date"],
+        #         y=df_borrow["borrow_rate"],
+        #         name="Borrow Rate",
+        #         mode="lines+markers",
+        #         line=dict(color="pink"),
+        #         marker=dict(symbol="diamond", size=6),
+        #         hovertemplate="<b>Borrow Rate: %{y:.4%}</b><br>%{x}<extra></extra>",
+        #     ),
+        # )
 
     # Plot Deposit APY (green)
     if "deposit_apy" in df_deposit.columns:
@@ -95,8 +124,20 @@ with col1:
             ),
         )
 
+        # fig.add_trace(
+        #     go.Scatter(
+        #         x=df_deposit["date"],
+        #         y=df_deposit["deposit_rate"],
+        #         name="Deposit Rate",
+        #         mode="lines+markers",
+        #         line=dict(color="teal"),
+        #         marker=dict(symbol="diamond", size=6),
+        #         hovertemplate="<b>Deposit Rate: %{y:.4%}</b><br>%{x}<extra></extra>",
+        #     ),
+        # )
+        
     fig.update_layout(
-        title=f"{token_name} Deposit & Borrow APY (Real-Time, 30 min.)",
+        title=f"{token_name} Deposit & Borrow APY (History + previous 10hr)",
         xaxis_title="Date",
         yaxis_title="APY",
         hovermode="x unified",
@@ -109,8 +150,8 @@ with col2:
     st.subheader("Latest Data ({name})".format(name=token_name))
 
     # Show latest borrow APY if available
-    if "borrow_apy" in df_deposit.columns:
-        latest_borrow = df_deposit.iloc[-1]
+    if "borrow_apy" in df_borrow.columns:
+        latest_borrow = df_borrow.iloc[-1]
         st.metric(
             "Latest Borrow APY",
             f"{latest_borrow['borrow_apy']:.4%}",
@@ -118,9 +159,10 @@ with col2:
         )
 
     # Show latest deposit APY
-    latest_deposit = df_deposit.iloc[-1]
-    st.metric(
-        "Latest Deposit APY",
-        f"{latest_deposit['deposit_apy']:.4%}",
-        help="Annual Percentage Yield for deposits"
-    )
+    if "deposit_apy" in df_deposit.columns:
+        latest_deposit = df_deposit.iloc[-1]
+        st.metric(
+            "Latest Deposit APY",
+            f"{latest_deposit['deposit_apy']:.4%}",
+            help="Annual Percentage Yield for deposits"
+        )
