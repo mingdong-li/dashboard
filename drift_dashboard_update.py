@@ -3,33 +3,24 @@ import streamlit as st
 import plotly.graph_objects as go
 import asyncio
 import pandas as pd
-
+import datetime
 from data_fectch import fetch_rate_cur, fetch_rate_history
 
 st.set_page_config(page_title="Drift Protocol Real-Time APY", layout="wide")
 st.title("Drift Protocol Real-Time APY")
 
+
+TOKEN_OPTION = ["zBTC", "USDC", "SOL", "JLP", "wBTC", "jitoSOL"]
 token_name = st.sidebar.selectbox(
     "Select Token",
-    options=["zBTC", "USDC", "SOL", "JLP", "wBTC", "jitoSOL"],
+    options=TOKEN_OPTION,
     key="realtime_token"
 )
-
-SAMPLE_FILE = "./data/realtime_samples_{token}.csv".format(token=token_name.lower())
-MAX_SAMPLES = 10
-
+MAX_SAMPLES = 24*30 # save at most the previous 30 days of data, 24 samples per day
+last_fetch_time = datetime.datetime.now()
 
 
-
-# Auto-refresh
-st_autorefresh = st.experimental_rerun if hasattr(st, "experimental_rerun") else None
-st_autorefresh = st_autorefresh or (lambda: None)
-st_autorefresh()
-# st.experimental_set_query_params(refresh=pd.Timestamp.now().isoformat())
-st.query_params = {"refresh": pd.Timestamp.now().isoformat()}
-
-
-def append_and_limit_csv(cur_d, cur_b, filename=SAMPLE_FILE, max_samples=MAX_SAMPLES):
+def append_and_limit_csv(cur_d, cur_b, filename, max_samples=MAX_SAMPLES):
     # Remove duplicate 'date' column from cur_b if exists
     if 'date' in cur_b.columns:
         cur_b = cur_b.drop(columns=['date'])
@@ -45,40 +36,54 @@ def append_and_limit_csv(cur_d, cur_b, filename=SAMPLE_FILE, max_samples=MAX_SAM
 
 
 # Only fetch and append if last sample is older than 60 mins or file doesn't exist
-def should_fetch(filename=SAMPLE_FILE):
-    if not os.path.exists(filename):
+def should_fetch():
+    if not os.path.getsize('./data')==0:
         return True
-    df = pd.read_csv(filename)
-    if df.empty:
+    now = datetime.datatime.now()
+    diff = now - last_fetch_time
+    
+    if diff > 10:
+        last_fetch_time = now
         return True
-    last_time = pd.to_datetime(df['date'].iloc[-1])
-    now = pd.Timestamp.now()
-    # return (now - last_time).total_seconds() > 3600
-    return (now - last_time).total_seconds() > 10
+    return False
 
 
-df_deposit, df_borrow = fetch_rate_history(token_name, day_fetch=30)
+# Auto-refresh
+st_autorefresh = st.experimental_rerun if hasattr(st, "experimental_rerun") else None
+st_autorefresh = st_autorefresh or (lambda: None)
+st_autorefresh()
+# st.experimental_set_query_params(refresh=pd.Timestamp.now().isoformat())
+st.query_params = {"refresh": pd.Timestamp.now().isoformat()}
+
+
+
 if should_fetch():
-    cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
-    append_and_limit_csv(cur_d, cur_b)
+    for token_name in TOKEN_OPTION:
+        # Fetch current rates of all underlying Assets
+        cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
+        append_and_limit_csv(cur_d, cur_b, filename = "./data/realtime_samples_{token}.csv".format(token=token_name.lower()))
 
 
-# Load data for plotting
+SAMPLE_FILE = "./data/realtime_samples_{token}.csv".format(token=token_name.lower())
+# Load data for plotting, history data only load for plot
+# 
 if os.path.exists(SAMPLE_FILE):
     # some bugs or unclear logic here
     df_saved = pd.read_csv(SAMPLE_FILE)
+    df_deposit, df_borrow = fetch_rate_history(token_name, day_fetch=30)
+
     df_d_saved = df_saved[["date", "deposit_rate", "deposit_apy"]]
     df_b_saced = df_saved[["date", "borrow_rate", "borrow_apy"]]
 
     cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
     df_deposit = pd.concat([df_deposit, df_d_saved], ignore_index=True)
     df_borrow = pd.concat([df_borrow, df_d_saved], ignore_index=True)
-    
-
 else:
-    cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
-    df_cur = pd.concat([cur_d, cur_b], axis=1)
-    append_and_limit_csv(cur_d, cur_b)
+    # this cannot be reached, but just in case
+    raise FileNotFoundError(f"Sample file {SAMPLE_FILE} does not exist. Please fetch data first.")
+    # cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
+    # df_cur = pd.concat([cur_d, cur_b], axis=1)
+    # append_and_limit_csv(cur_d, cur_b)
 
 
 col1, col2 = st.columns([3, 1])  

@@ -6,7 +6,7 @@ import asyncio
 
 from data_fectch import fetch_rate_cur, fetch_rate_history
 
-# python -m venv venv
+# python -m venv ../drift-v2-streamlit/venv
 # source ../drift-v2-streamlit/venv/bin/activate
 
 
