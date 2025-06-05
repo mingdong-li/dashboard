@@ -9,6 +9,8 @@ from data_fectch import fetch_rate_cur, fetch_rate_history
 st.set_page_config(page_title="Drift Protocol Real-Time APY", layout="wide")
 st.title("Drift Protocol Real-Time APY")
 
+if "last_fetch_time" not in st.session_state:
+    st.session_state["last_fetch_time"] = datetime.datetime.now()
 
 TOKEN_OPTION = ["zBTC", "USDC", "SOL", "JLP", "wBTC", "jitoSOL"]
 token_name = st.sidebar.selectbox(
@@ -37,13 +39,15 @@ def append_and_limit_csv(cur_d, cur_b, filename, max_samples=MAX_SAMPLES):
 
 # Only fetch and append if last sample is older than 60 mins or file doesn't exist
 def should_fetch():
-    if not os.path.getsize('./data')==0:
+    if len(os.listdir('./data')) == 0:
         return True
-    now = datetime.datatime.now()
+    now = datetime.datetime.now()
+    last_fetch_time = st.session_state["last_fetch_time"]
     diff = now - last_fetch_time
     
-    if diff > 10:
-        last_fetch_time = now
+    if diff.total_seconds() > 10:
+    # if diff.total_seconds() > 3600:
+        st.session_state["last_fetch_time"] = now
         return True
     return False
 
@@ -66,18 +70,17 @@ if should_fetch():
 
 SAMPLE_FILE = "./data/realtime_samples_{token}.csv".format(token=token_name.lower())
 # Load data for plotting, history data only load for plot
-# 
 if os.path.exists(SAMPLE_FILE):
     # some bugs or unclear logic here
     df_saved = pd.read_csv(SAMPLE_FILE)
     df_deposit, df_borrow = fetch_rate_history(token_name, day_fetch=30)
 
     df_d_saved = df_saved[["date", "deposit_rate", "deposit_apy"]]
-    df_b_saced = df_saved[["date", "borrow_rate", "borrow_apy"]]
+    df_b_saved = df_saved[["date", "borrow_rate", "borrow_apy"]]
 
     cur_d, cur_b = asyncio.run(fetch_rate_cur(token_name))
     df_deposit = pd.concat([df_deposit, df_d_saved], ignore_index=True)
-    df_borrow = pd.concat([df_borrow, df_d_saved], ignore_index=True)
+    df_borrow = pd.concat([df_borrow, df_b_saved], ignore_index=True)
 else:
     # this cannot be reached, but just in case
     raise FileNotFoundError(f"Sample file {SAMPLE_FILE} does not exist. Please fetch data first.")
